@@ -16,7 +16,8 @@ from transformers import (
     default_data_collator,
     get_scheduler,
     DataCollatorWithPadding,
-    DataCollatorForLanguageModeling
+    DataCollatorForLanguageModeling,
+    DataCollatorForSeq2Seq
 )
 
 import deepspeed
@@ -88,20 +89,20 @@ def parse_args():
     parser.add_argument(
         "--per_device_train_batch_size",
         type=int,
-        default=1,
+        default=2,
         help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
         "--per_device_eval_batch_size",
         type=int,
-        default=1,
+        default=2,
         help="Batch size (per device) for the evaluation dataloader.",
     )
     parser.add_argument(
         "--max_seq_len",
         type=int,
         # default=512,
-        default=2048,
+        default=1024,
         help="The maximum sequence length.",
     )
     parser.add_argument(
@@ -278,6 +279,11 @@ def main():
     tokenizer = load_hf_tokenizer(args.model_name_or_path,
                                   fast_tokenizer=True,
                                   add_special_tokens=additional_special_tokens)
+    #for eval, since model gen using flash should padding with left side
+    tokenizer_eval = load_hf_tokenizer(args.model_name_or_path,
+                                  fast_tokenizer=True,
+                                  add_special_tokens=additional_special_tokens)
+    tokenizer_eval.padding_side = "left"
 
     model = create_hf_model(AutoModelForCausalLM,
                             args.model_name_or_path,
@@ -331,16 +337,20 @@ def main():
         if args.is_eval:
             eval_sampler = DistributedSampler(eval_dataset)
 
-    data_collator = DataCollatorWithPadding(tokenizer)
+    # data_collator = DataCollatorWithPadding(tokenizer)
+
+    data_collator_train = DataCollatorForSeq2Seq(tokenizer=tokenizer, padding=True)
+
+    data_collator_eval = DataCollatorForSeq2Seq(tokenizer=tokenizer_eval, padding=True)
     #data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False, truncation=True)
     train_dataloader = DataLoader(train_dataset,
-                                  collate_fn=data_collator,
+                                  collate_fn=data_collator_train,
                                   sampler=train_sampler,
                                   num_workers=args.num_workers,
                                   batch_size=args.per_device_train_batch_size)
     if args.is_eval:
         eval_dataloader = DataLoader(eval_dataset,
-                                     collate_fn=data_collator,
+                                     collate_fn=data_collator_eval,
                                      sampler=eval_sampler,
                                      num_workers=args.num_workers,
                                      batch_size=args.per_device_eval_batch_size)
